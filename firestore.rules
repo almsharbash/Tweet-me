@@ -6,10 +6,15 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if request.auth != null;
       allow create, update: if request.auth != null && request.auth.uid == uid;
-      allow delete: if false;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+
+      // قائمة من حظرتهم: خاصة بصاحبها فقط
+      match /blocked/{other} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
     }
 
-    // أسماء المستخدمين (فريدة): إنشاء فقط، لا يمكن تعديل اسم محجوز
+    // أسماء المستخدمين (فريدة): إنشاء فقط، ولا يُحذف إلا من صاحبه
     match /usernames/{name} {
       allow read: if request.auth != null;
       allow create: if request.auth != null
@@ -33,12 +38,24 @@ service cloud.firestore {
 
       match /messages/{mid} {
         allow read: if request.auth != null && request.auth.uid in cid.split('_');
+
+        // إرسال: لا يجوز إن كان الطرف الآخر حاظراً لك
         allow create: if request.auth != null
                       && request.auth.uid in cid.split('_')
                       && request.resource.data.from == request.auth.uid
                       && request.resource.data.type in ['text', 'image', 'voice']
-                      && request.resource.data.keys().hasAll(['from', 'type', 'at']);
-        allow update, delete: if false;
+                      && request.resource.data.keys().hasAll(['from', 'type', 'at'])
+                      && !exists(/databases/$(database)/documents/users/$(cid.split('_')[0] == request.auth.uid ? cid.split('_')[1] : cid.split('_')[0])/blocked/$(request.auth.uid));
+
+        // تعديل: الطرفان للتفاعلات والإخفاء عندي، والمرسل وحده للحذف للجميع والتعديل
+        allow update: if request.auth != null
+                      && request.auth.uid in cid.split('_')
+                      && (
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'hiddenFor'])
+                        || (resource.data.from == request.auth.uid
+                            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'text', 'url', 'edited']))
+                      );
+        allow delete: if false;
       }
     }
   }
